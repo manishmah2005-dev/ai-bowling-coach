@@ -1,209 +1,185 @@
-# ================================================================
-# rule_engine.py — AI Bowling Recommendation Engine
-# Maps batsman weaknesses -> bowling strategies
-# ================================================================
-
-import csv
-import os
-from collections import Counter
-
-# ================================================================
-# RULE BASE — weakness -> bowling strategies
-# Each rule has:
-#   - condition  : which weaknesses trigger it
-#   - line       : where to bowl (Off stump / Middle / Leg / Yorker)
-#   - length     : how full/short (Short / Good Length / Full / Yorker)
-#   - speed      : pace recommendation
-#   - variation  : type of delivery
-#   - reason     : why this works
-# ================================================================
-
-RULES = [
-    {
-        "id": "R1",
-        "condition": ["Head falling to off-side"],
-        "line": "Middle stump",
-        "length": "Good Length",
-        "speed": "Medium-Fast (130-140 kmph)",
-        "variation": "Straight / Slight Inswing",
-        "reason": "Head falling off-side opens LBW gate. Straight ball hits stumps.",
-        "priority": 1
-    },
-    {
-        "id": "R2",
-        "condition": ["Head falling to leg-side"],
-        "line": "Off stump",
-        "length": "Good Length",
-        "speed": "Medium (120-130 kmph)",
-        "variation": "Outswing",
-        "reason": "Head falling leg-side means bat comes from wrong angle — outside edge likely.",
-        "priority": 1
-    },
-    {
-        "id": "R3",
-        "condition": ["Lunging on front foot"],
-        "line": "Off stump",
-        "length": "Short of Good Length",
-        "speed": "Fast (140-150 kmph)",
-        "variation": "Bouncer / Short Pitch",
-        "reason": "Batsman commits forward early — short ball hits body or gets top edge.",
-        "priority": 1
-    },
-    {
-        "id": "R4",
-        "condition": ["Wide back-lift / open bat face"],
-        "line": "Off stump",
-        "length": "Good Length",
-        "speed": "Medium-Fast (130-140 kmph)",
-        "variation": "Inswing / Late Swing",
-        "reason": "Open bat face = outside edge to slip. Inswing maximizes edge chance.",
-        "priority": 2
-    },
-    {
-        "id": "R5",
-        "condition": ["Weight falling back"],
-        "line": "Yorker Line (Stumps)",
-        "length": "Full / Yorker",
-        "speed": "Fast (140-150 kmph)",
-        "variation": "Straight Yorker",
-        "reason": "Weight back = no drive power. Full ball jams the batsman for LBW/bowled.",
-        "priority": 1
-    },
-    {
-        "id": "R6",
-        "condition": ["Elbow dropped (collapsed arm)"],
-        "line": "Short of Off stump",
-        "length": "Short",
-        "speed": "Fast (145+ kmph)",
-        "variation": "Rising Delivery / Bouncer",
-        "reason": "Collapsed elbow = weak pull shot. Rising ball gets top edge or hits glove.",
-        "priority": 2
-    },
-    # Combo rules — multiple weaknesses together
-    {
-        "id": "R7",
-        "condition": ["Head falling to off-side", "Wide back-lift / open bat face"],
-        "line": "Middle-Off stump",
-        "length": "Good Length",
-        "speed": "Medium-Fast (130-140 kmph)",
-        "variation": "Inswing",
-        "reason": "COMBO: Head + open face = perfect inswing trap. High LBW/bowled chance.",
-        "priority": 0  # highest priority
-    },
-    {
-        "id": "R8",
-        "condition": ["Weight falling back", "Elbow dropped (collapsed arm)"],
-        "line": "Yorker Line",
-        "length": "Yorker",
-        "speed": "Fast (145+ kmph)",
-        "variation": "Fast Yorker",
-        "reason": "COMBO: Weight back + elbow drop = completely jammed. Full fast yorker = bowled.",
-        "priority": 0
-    },
-]
-
-# ================================================================
-# Core: match weaknesses to rules
-# ================================================================
-def get_recommendations(weaknesses):
+def get_strategies(scores, weaknesses):
     """
-    Input : list of weakness strings (from pose_analysis.py)
-    Output: list of matched rules sorted by priority
+    Numeric scores ke basis par personalized bowling strategies generate karo.
+    Har player ke scores alag honge — toh strategies bhi alag hongi.
     """
-    if not weaknesses:
-        return []
+    strategies = []
 
-    matched = []
+    balance = scores.get('balance', 100)
+    footwork = scores.get('footwork', 100)
+    timing = scores.get('timing', 100)
+    bat_swing = scores.get('bat_swing', 100)
+    overall = scores.get('overall', 100)
 
-    for rule in RULES:
-        # Check if ANY condition in rule matches detected weaknesses
-        match_count = sum(1 for cond in rule["condition"] if cond in weaknesses)
+    # ── BALANCE based rules ──────────────────────────────────────
+    if balance < 40:
+        strategies.append({
+            'priority': 'HIGH',
+            'line': 'Middle-Off stump',
+            'length': 'Good Length',
+            'speed': 'Fast (140-150 kmph)',
+            'variation': 'Inswing',
+            'why': f'Balance score {balance}/100 — head falling badly. Inswing will follow the head.'
+        })
+    elif balance < 65:
+        strategies.append({
+            'priority': 'MEDIUM',
+            'line': 'Off stump',
+            'length': 'Good Length',
+            'speed': 'Medium-Fast (125-135 kmph)',
+            'variation': 'Outswing',
+            'why': f'Balance score {balance}/100 — head slightly off. Outswing outside off stump.'
+        })
 
-        if match_count > 0:
-            score = match_count / len(rule["condition"])  # match quality 0-1
-            matched.append({**rule, "match_score": round(score, 2)})
+    # ── FOOTWORK based rules ─────────────────────────────────────
+    if footwork < 40:
+        strategies.append({
+            'priority': 'HIGH',
+            'line': 'Stump line',
+            'length': 'Short (Back of length)',
+            'speed': 'Fast (140+ kmph)',
+            'variation': 'Bouncer',
+            'why': f'Footwork score {footwork}/100 — lunging badly. Short ball will rush the batsman.'
+        })
+    elif footwork < 65:
+        strategies.append({
+            'priority': 'MEDIUM',
+            'line': 'Middle stump',
+            'length': 'Short-Good Length',
+            'speed': 'Medium-Fast (130-140 kmph)',
+            'variation': 'Seam movement',
+            'why': f'Footwork score {footwork}/100 — footwork weak. Variable length will create confusion.'
+        })
 
-    # Sort: combo rules first (priority 0), then by match score
-    matched.sort(key=lambda x: (x["priority"], -x["match_score"]))
+    # ── TIMING based rules ───────────────────────────────────────
+    if timing < 40:
+        strategies.append({
+            'priority': 'HIGH',
+            'line': 'Yorker line (toes)',
+            'length': 'Full / Yorker',
+            'speed': 'Fast (140-150 kmph)',
+            'variation': 'Straight yorker',
+            'why': f'Timing score {timing}/100 — elbow dropped. Fast yorker before bat comes down.'
+        })
+    elif timing < 65:
+        strategies.append({
+            'priority': 'MEDIUM',
+            'line': 'Off stump',
+            'length': 'Full',
+            'speed': 'Medium (120-130 kmph)',
+            'variation': 'Slower ball',
+            'why': f'Timing score {timing}/100 — timing off. Slower ball will induce mistimed shot.'
+        })
 
-    return matched
+    # ── BAT SWING based rules ────────────────────────────────────
+    if bat_swing < 40:
+        strategies.append({
+            'priority': 'HIGH',
+            'line': 'Off stump',
+            'length': 'Good Length',
+            'speed': 'Medium-Fast (130-140 kmph)',
+            'variation': 'Away swing',
+            'why': f'Bat swing score {bat_swing}/100 — open face. Away swing will find outside edge.'
+        })
+    elif bat_swing < 65:
+        strategies.append({
+            'priority': 'MEDIUM',
+            'line': 'Middle-Off',
+            'length': 'Good Length',
+            'speed': 'Medium (125-135 kmph)',
+            'variation': 'Off cutter',
+            'why': f'Bat swing score {bat_swing}/100 — back-lift issue. Off cutter will beat the bat.'
+        })
 
-# ================================================================
-# Display recommendations nicely
-# ================================================================
-def display_recommendations(weaknesses, recommendations):
-    print("\n" + "=" * 60)
-    print("  AI BOWLING COACH - STRATEGY REPORT")
-    print("=" * 60)
+    # ── COMBO ATTACKS (multiple weak areas) ──────────────────────
+    if balance < 65 and footwork < 65:
+        strategies.append({
+            'priority': 'COMBO',
+            'line': 'Middle stump',
+            'length': 'Good Length',
+            'speed': 'Fast (140+ kmph)',
+            'variation': 'Inswing',
+            'why': f'Balance {balance} + Footwork {footwork} — both weak. Inswing on stumps is deadly combo.'
+        })
 
-    if not weaknesses:
-        print("  No weaknesses detected — batsman has good technique!")
-        print("  Bowl: Vary pace and length to create uncertainty.")
-        return
+    if timing < 65 and bat_swing < 65:
+        strategies.append({
+            'priority': 'COMBO',
+            'line': 'Off stump',
+            'length': 'Full',
+            'speed': 'Medium-Fast (130-140 kmph)',
+            'variation': 'Outswing + Slower ball mix',
+            'why': f'Timing {timing} + Bat swing {bat_swing} — both weak. Mix pace to create confusion.'
+        })
 
-    print(f"\n  Weaknesses Detected ({len(weaknesses)}):")
-    for w in weaknesses:
-        print(f"    - {w}")
+    # ── DEFAULT (agar sab scores achhe hain) ─────────────────────
+    if not strategies:
+        strategies.append({
+            'priority': 'STANDARD',
+            'line': 'Off stump',
+            'length': 'Good Length',
+            'speed': 'Medium-Fast (130-140 kmph)',
+            'variation': 'Seam movement',
+            'why': f'Overall score {overall}/100 — batsman technically sound. Standard line and length.'
+        })
 
-    if not recommendations:
-        print("\n  No specific strategy found.")
-        return
+    # Priority ke hisaab se sort karo
+    priority_order = {'COMBO': 0, 'HIGH': 1, 'MEDIUM': 2, 'STANDARD': 3}
+    strategies.sort(key=lambda x: priority_order.get(x['priority'], 4))
 
-    print(f"\n  Recommended Strategies ({len(recommendations)} found):\n")
+    return strategies
 
-    for i, rec in enumerate(recommendations[:3]):  # top 3 only
-        tag = "[COMBO ATTACK]" if rec["priority"] == 0 else f"[Strategy {i+1}]"
-        print(f"  {tag}")
-        print(f"  Rule ID   : {rec['id']}")
-        print(f"  Line      : {rec['line']}")
-        print(f"  Length    : {rec['length']}")
-        print(f"  Speed     : {rec['speed']}")
-        print(f"  Variation : {rec['variation']}")
-        print(f"  Why       : {rec['reason']}")
-        print(f"  Match     : {int(rec['match_score']*100)}% condition match")
-        print()
 
-    print("=" * 60)
+def generate_report(scores, weaknesses):
+    """Terminal mein readable report print karo"""
+    print("\n" + "=" * 55)
+    print("   AI BOWLING COACH — PERSONALIZED STRATEGY REPORT")
+    print("=" * 55)
 
-# ================================================================
-# Load weaknesses from CSV and recommend
-# ================================================================
-def recommend_from_csv(csv_file="progress_log.csv", session=None):
-    if not os.path.exists(csv_file):
-        print("No progress_log.csv found. Run pose_analysis.py first!")
-        return
+    print("\n  SCORES:")
+    for key, val in scores.items():
+        if key != 'overall':
+            bar = '#' * (val // 10) + '-' * (10 - val // 10)
+            status = "GOOD" if val >= 65 else "WEAK"
+            print(f"    {key.title():12} [{bar}] {val}/100  {status}")
 
-    weakness_counts = Counter()
+    print(f"\n  Overall Rating: {scores.get('overall', 0)}/100")
 
-    with open(csv_file, mode='r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if session and str(row["Session"]) != str(session):
-                continue
-            if row["Head_Falling"]       == "1": weakness_counts["Head falling to off-side"] += 1
-            if row["Lunging_Front_Foot"] == "1": weakness_counts["Lunging on front foot"] += 1
-            if row["Wide_Backlift"]      == "1": weakness_counts["Wide back-lift / open bat face"] += 1
-            if row["Weight_Back"]        == "1": weakness_counts["Weight falling back"] += 1
-            if row["Elbow_Drop"]         == "1": weakness_counts["Elbow dropped (collapsed arm)"] += 1
-
-    # Only include weaknesses seen more than once
-    active_weaknesses = [w for w, count in weakness_counts.items() if count > 0]
-
-    recommendations = get_recommendations(active_weaknesses)
-    display_recommendations(active_weaknesses, recommendations)
-
-    return recommendations
-
-# ================================================================
-# Run directly
-# ================================================================
-if __name__ == "__main__":
-    import sys
-    session = sys.argv[1] if len(sys.argv) > 1 else None
-
-    if session:
-        print(f"Analyzing Session {session}...")
+    if weaknesses:
+        print(f"\n  Weaknesses Detected ({len(weaknesses)}):")
+        for w in weaknesses:
+            print(f"    - {w}")
     else:
-        print("Analyzing all sessions...")
+        print("\n  No major weaknesses detected!")
 
-    recommend_from_csv(session=session)
+    strategies = get_strategies(scores, weaknesses)
+
+    print(f"\n  BOWLING STRATEGIES ({len(strategies)} recommended):")
+    for i, s in enumerate(strategies, 1):
+        print(f"\n  [{s['priority']}] Strategy {i}")
+        print(f"    Line      : {s['line']}")
+        print(f"    Length    : {s['length']}")
+        print(f"    Speed     : {s['speed']}")
+        print(f"    Variation : {s['variation']}")
+        print(f"    Why       : {s['why']}")
+
+    print("\n" + "=" * 55)
+    return strategies
+
+
+if __name__ == "__main__":
+    # Test with different player profiles
+    print("\n--- TEST: Player with poor balance and footwork ---")
+    scores1 = {'balance': 35, 'footwork': 42, 'timing': 80, 'bat_swing': 75, 'overall': 55}
+    weaknesses1 = ['Head falling to off-side', 'Lunging on front foot']
+    generate_report(scores1, weaknesses1)
+
+    print("\n--- TEST: Player with poor timing and bat swing ---")
+    scores2 = {'balance': 78, 'footwork': 82, 'timing': 38, 'bat_swing': 41, 'overall': 61}
+    weaknesses2 = ['Elbow dropped - late swing', 'Wide back-lift / open bat face']
+    generate_report(scores2, weaknesses2)
+
+    print("\n--- TEST: Strong player (Virat-like) ---")
+    scores3 = {'balance': 91, 'footwork': 88, 'timing': 85, 'bat_swing': 90, 'overall': 89}
+    weaknesses3 = []
+    generate_report(scores3, weaknesses3)
