@@ -6,11 +6,18 @@ import os
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime
+from dotenv import load_dotenv
 
 from pose_analysis import analyze_video
-from rule_engine import get_strategies, generate_report
-from ball_tracker import track_ball, analyze_ball_trajectory
+from rule_engine import get_strategies
+from ball_tracker import track_ball
+from gemini_coach import configure_gemini, get_ai_analysis, get_comparison_insight
+
+# Load .env
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    configure_gemini(GEMINI_API_KEY)
 
 # ── Page config ──────────────────────────────────────────────────
 st.set_page_config(
@@ -37,13 +44,20 @@ st.markdown("""
         border-radius: 8px;
         margin: 8px 0;
     }
-    .combo-card { border-left-color: #e74c3c; }
-    .high-card  { border-left-color: #e67e22; }
-    .medium-card{ border-left-color: #3498db; }
+    .combo-card  { border-left-color: #e74c3c; }
+    .high-card   { border-left-color: #e67e22; }
+    .medium-card { border-left-color: #3498db; }
+    .ai-box {
+        background: linear-gradient(135deg, #1a1a2e, #16213e);
+        border: 1px solid #00ff88;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 12px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Sidebar navigation ───────────────────────────────────────────
+# ── Sidebar ──────────────────────────────────────────────────────
 st.sidebar.title("🏏 AI Bowling Coach")
 page = st.sidebar.radio("Navigate", [
     "Analyze Video",
@@ -58,11 +72,9 @@ if page == "Analyze Video":
     st.title("🏏 AI Bowling Coach — Video Analysis")
 
     col1, col2 = st.columns([2, 1])
-
     with col1:
         player_name = st.text_input("Player Name", placeholder="e.g. Virat Kohli")
         session_num = st.number_input("Session Number", min_value=1, value=1)
-
     with col2:
         batting_style = st.selectbox("Batting Style", ["Right Hand", "Left Hand"])
         batting_position = st.selectbox("Position", ["Opener", "Top Order", "Middle Order", "Lower Order"])
@@ -112,13 +124,10 @@ if page == "Analyze Video":
                 avg_scores.get('timing', 0),
                 avg_scores.get('bat_swing', 0)
             ]
-            values_closed = values + [values[0]]
-            categories_closed = categories + [categories[0]]
-
             fig = go.Figure()
             fig.add_trace(go.Scatterpolar(
-                r=values_closed,
-                theta=categories_closed,
+                r=values + [values[0]],
+                theta=categories + [categories[0]],
                 fill='toself',
                 name=player_display,
                 line_color='#00ff88'
@@ -126,7 +135,6 @@ if page == "Analyze Video":
             fig.update_layout(
                 polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
                 paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
                 font=dict(color='white'),
                 height=350
             )
@@ -146,18 +154,15 @@ if page == "Analyze Video":
 
             for s in strategies:
                 priority = s['priority']
-                css_class = f"{priority.lower()}-card"
                 badge_color = {
-                    'COMBO': '#e74c3c',
-                    'HIGH': '#e67e22',
-                    'MEDIUM': '#3498db',
-                    'STANDARD': '#2ecc71'
+                    'COMBO': '#e74c3c', 'HIGH': '#e67e22',
+                    'MEDIUM': '#3498db', 'STANDARD': '#2ecc71'
                 }.get(priority, '#888')
 
                 st.markdown(f"""
-                <div class="strategy-card {css_class}">
-                    <span style="background:{badge_color};padding:2px 8px;border-radius:4px;font-size:12px;font-weight:bold">{priority}</span>
-                    <br><br>
+                <div class="strategy-card {priority.lower()}-card">
+                    <span style="background:{badge_color};padding:2px 8px;border-radius:4px;
+                    font-size:12px;font-weight:bold">{priority}</span><br><br>
                     <b>Line:</b> {s['line']} &nbsp;|&nbsp;
                     <b>Length:</b> {s['length']} &nbsp;|&nbsp;
                     <b>Speed:</b> {s['speed']}<br>
@@ -165,6 +170,22 @@ if page == "Analyze Video":
                     <small style="color:#aaa">💡 {s['why']}</small>
                 </div>
                 """, unsafe_allow_html=True)
+
+            # ── GEMINI AI ANALYSIS ───────────────────────────────
+            st.subheader("🤖 AI Coach Analysis")
+            if GEMINI_API_KEY:
+                with st.spinner("Getting AI coaching insights..."):
+                    ai_feedback = get_ai_analysis(
+                        player_display, avg_scores, weaknesses, strategies
+                    )
+                st.markdown(f"""
+                <div class="ai-box">
+                    <h4 style="color:#00ff88">🧠 Gemini AI Coach says:</h4>
+                    <p style="color:#ddd;line-height:1.6">{ai_feedback}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.warning("Add GEMINI_API_KEY in .env file to enable AI coaching.")
 
             # ── ANNOTATED FRAMES ─────────────────────────────────
             if frames:
@@ -186,14 +207,10 @@ elif page == "Progress Report":
         df = pd.read_csv('progress_log.csv')
         st.dataframe(df, use_container_width=True)
 
-        # Line chart — scores over sessions
-        st.subheader("Score Trends Over Sessions")
         score_cols = [c for c in ['Balance', 'Footwork', 'Timing', 'BatSwing', 'Overall'] if c in df.columns]
-
         if score_cols:
             fig = px.line(df, x='Session', y=score_cols,
-                         title="Performance Scores Over Time",
-                         markers=True)
+                         title="Performance Scores Over Time", markers=True)
             fig.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
@@ -201,7 +218,6 @@ elif page == "Progress Report":
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Latest session summary
         if len(df) > 0:
             latest = df.iloc[-1]
             st.subheader("Latest Session Summary")
@@ -213,8 +229,7 @@ elif page == "Progress Report":
                     with cols[i]:
                         st.markdown(f"""
                         <div class="score-card {css}">
-                            <h2>{val}</h2>
-                            <p>{col}</p>
+                            <h2>{val}</h2><p>{col}</p>
                         </div>
                         """, unsafe_allow_html=True)
 
@@ -223,15 +238,13 @@ elif page == "Progress Report":
 # ════════════════════════════════════════════════════════════════
 elif page == "Compare Players":
     st.title("⚖️ Compare Players")
-    st.info("Upload two batting videos to compare their technique side by side.")
+    st.info("Upload two batting videos to compare technique side by side.")
 
     col1, col2 = st.columns(2)
-
     with col1:
         st.subheader("Player 1")
         name1 = st.text_input("Name", key="n1", placeholder="e.g. Player A")
         video1 = st.file_uploader("Video", type=['mp4', 'avi', 'mov'], key="v1")
-
     with col2:
         st.subheader("Player 2")
         name2 = st.text_input("Name", key="n2", placeholder="e.g. Player B")
@@ -246,76 +259,71 @@ elif page == "Compare Players":
             with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
                 tfile.write(video.read())
                 vpath = tfile.name
-
             with st.spinner(f"Analyzing {name}..."):
                 _, _, avg_scores, _ = analyze_video(vpath, i+1)
             os.unlink(vpath)
             scores_list.append(avg_scores)
 
         if all(scores_list):
-            # Side by side scores
-            st.subheader("Score Comparison")
+            # Radar overlay
+            st.subheader("Skill Radar Comparison")
             categories = ['Balance', 'Footwork', 'Timing', 'Bat Swing']
             keys = ['balance', 'footwork', 'timing', 'bat_swing']
-
-            fig = go.Figure()
             colors = ['#00ff88', '#ff6b6b']
 
+            fig = go.Figure()
             for i, (scores, name) in enumerate(zip(scores_list, names)):
                 vals = [scores.get(k, 0) for k in keys]
-                vals_closed = vals + [vals[0]]
                 fig.add_trace(go.Scatterpolar(
-                    r=vals_closed,
+                    r=vals + [vals[0]],
                     theta=categories + [categories[0]],
-                    fill='toself',
-                    name=name,
-                    line_color=colors[i],
-                    opacity=0.7
+                    fill='toself', name=name,
+                    line_color=colors[i], opacity=0.7
                 ))
-
             fig.update_layout(
                 polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
                 paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(color='white'),
-                height=400
+                font=dict(color='white'), height=400
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Bar chart comparison
-            comp_data = []
-            for key, label in zip(keys, categories):
-                comp_data.append({
-                    'Skill': label,
-                    names[0]: scores_list[0].get(key, 0),
-                    names[1]: scores_list[1].get(key, 0)
-                })
-
-            comp_df = pd.DataFrame(comp_data)
-            fig2 = px.bar(comp_df, x='Skill', y=[names[0], names[1]],
-                         barmode='group', title="Score Breakdown")
-            fig2.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(color='white')
-            )
+            # Bar chart
+            comp_data = [{'Skill': label, names[0]: scores_list[0].get(k, 0),
+                          names[1]: scores_list[1].get(k, 0)}
+                         for k, label in zip(keys, categories)]
+            fig2 = px.bar(pd.DataFrame(comp_data), x='Skill',
+                         y=[names[0], names[1]], barmode='group')
+            fig2.update_layout(paper_bgcolor='rgba(0,0,0,0)',
+                               plot_bgcolor='rgba(0,0,0,0)',
+                               font=dict(color='white'))
             st.plotly_chart(fig2, use_container_width=True)
 
-            # Individual strategies
+            # Gemini comparison insight
+            if GEMINI_API_KEY:
+                st.subheader("🤖 AI Comparison Insight")
+                with st.spinner("Getting AI comparison..."):
+                    insight = get_comparison_insight(
+                        names[0], scores_list[0],
+                        names[1], scores_list[1]
+                    )
+                st.markdown(f"""
+                <div class="ai-box">
+                    <h4 style="color:#00ff88">🧠 Gemini AI says:</h4>
+                    <p style="color:#ddd;line-height:1.6">{insight}</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # Individual top strategies
             col1, col2 = st.columns(2)
             for i, (scores, name) in enumerate(zip(scores_list, names)):
                 weaknesses = []
-                if scores.get('balance', 100) < 65:
-                    weaknesses.append('Balance issue')
-                if scores.get('footwork', 100) < 65:
-                    weaknesses.append('Footwork issue')
-                if scores.get('timing', 100) < 65:
-                    weaknesses.append('Timing issue')
-                if scores.get('bat_swing', 100) < 65:
-                    weaknesses.append('Bat swing issue')
+                if scores.get('balance', 100) < 65: weaknesses.append('Balance issue')
+                if scores.get('footwork', 100) < 65: weaknesses.append('Footwork issue')
+                if scores.get('timing', 100) < 65: weaknesses.append('Timing issue')
+                if scores.get('bat_swing', 100) < 65: weaknesses.append('Bat swing issue')
 
                 strategies = get_strategies(scores, weaknesses)
                 target_col = col1 if i == 0 else col2
-
                 with target_col:
                     st.subheader(f"🎯 {name} — Top Strategy")
                     if strategies:
